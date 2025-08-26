@@ -1,20 +1,30 @@
-import React, { useState } from "react";
+import React, { useState, useEffect, useRef } from "react";
 import {
   Plus,
   Trash2,
   Calculator,
-  PieChart,
   TrendingUp,
-  ChevronLeft,
-  ChevronRight,
   Calendar,
   BarChart3,
 } from "lucide-react";
+import { useAuth } from "../contexts/AuthContext";
+import { supabase } from "./supabaseClient";
 
 const BudgetManager = () => {
   const [currentTab, setCurrentTab] = useState("budget");
   const [currentMonth, setCurrentMonth] = useState(6); // July (0-indexed)
   const [currentYear, setCurrentYear] = useState(2025);
+  const {
+    user,
+    authLoading,
+    loginWithGoogle,
+    loginWithEmail,
+    signupWithEmail,
+    resetPassword,
+    logout,
+  } = useAuth();
+  const [remoteLoading, setRemoteLoading] = useState(false);
+  const saveTimer = useRef(null);
 
   const months = [
     "January",
@@ -212,6 +222,45 @@ const BudgetManager = () => {
   const income = currentBudget.income;
   const categories = currentBudget.categories;
 
+  // Load saved data from Supabase on login
+  useEffect(() => {
+    const load = async () => {
+      if (!user) return;
+      setRemoteLoading(true);
+      const { data, error } = await supabase
+        .from("budgets")
+        .select("*")
+        .eq("user_id", user.id)
+        .single();
+      if (!error && data) {
+        if (data.data) setMonthlyBudgets(data.data);
+        if (data.current_month !== undefined)
+          setCurrentMonth(data.current_month);
+        if (data.current_year !== undefined) setCurrentYear(data.current_year);
+      }
+      setRemoteLoading(false);
+    };
+    load();
+  }, [user]);
+
+  // Debounced auto-save whenever local state changes
+  useEffect(() => {
+    if (!user) return;
+    if (saveTimer.current) clearTimeout(saveTimer.current);
+    saveTimer.current = setTimeout(async () => {
+      await supabase.from("budgets").upsert({
+        user_id: user.id,
+        data: monthlyBudgets,
+        current_month: currentMonth,
+        current_year: currentYear,
+        updated_at: new Date().toISOString(),
+      });
+    }, 700);
+    return () => {
+      if (saveTimer.current) clearTimeout(saveTimer.current);
+    };
+  }, [user, monthlyBudgets, currentMonth, currentYear]);
+
   // Navigation functions
   const navigateMonth = (direction) => {
     if (direction === "prev") {
@@ -251,24 +300,19 @@ const BudgetManager = () => {
   const wantsBudget = totalIncome * 0.3;
   const savingsBudget = totalIncome * 0.2;
 
-  // Calculate actual spending by category
-  const calculateCategoryTotal = (categoryType) => {
-    return categories
-      .filter((cat) => cat.type === categoryType)
-      .reduce((total, category) => {
-        return (
-          total +
-          category.items
-            .filter((item) => item.active)
-            .reduce((sum, item) => sum + item.amount, 0)
-        );
-      }, 0);
-  };
-
-  const needsSpent = calculateCategoryTotal("needs");
-  const wantsSpent = calculateCategoryTotal("wants");
-  const totalExpenses = needsSpent + wantsSpent;
-  const actualSavings = totalIncome - totalExpenses;
+  // Calculate actual spending by category (currently unused)
+  // const calculateCategoryTotal = (categoryType) => {
+  //   return categories
+  //     .filter((cat) => cat.type === categoryType)
+  //     .reduce((total, category) => {
+  //       return (
+  //         total +
+  //         category.items
+  //           .filter((item) => item.active)
+  //           .reduce((sum, item) => sum + item.amount, 0)
+  //       );
+  //     }, 0);
+  // };
 
   // Forecast calculations
   const calculateYearlyForecast = () => {
@@ -473,6 +517,28 @@ const BudgetManager = () => {
     });
   })();
 
+  const [email, setEmail] = React.useState("");
+  const [password, setPassword] = React.useState("");
+  const [authError, setAuthError] = React.useState("");
+
+  const handleLogin = async () => {
+    setAuthError("");
+    const { error } = await loginWithEmail(email.trim(), password);
+    if (error) setAuthError(error.message);
+  };
+
+  const handleSignup = async () => {
+    setAuthError("");
+    const { error } = await signupWithEmail(email.trim(), password);
+    if (error) setAuthError(error.message);
+  };
+
+  const handleReset = async () => {
+    setAuthError("");
+    const { error } = await resetPassword(email.trim());
+    if (error) setAuthError(error.message);
+  };
+
   return (
     <div className="container">
       <div>
@@ -497,26 +563,138 @@ const BudgetManager = () => {
               <Calculator style={{ color: "#2563eb" }} />
               Personal Budget Manager
             </h1>
-            {/* Tab Navigation */}
-            <div className="tabs">
-              <button
-                onClick={() => setCurrentTab("budget")}
-                className={`tab-btn${currentTab === "budget" ? " active" : ""}`}
-              >
-                <Calculator size={16} /> Monthly Budget
-              </button>
-              <button
-                onClick={() => setCurrentTab("forecast")}
-                className={`tab-btn${
-                  currentTab === "forecast" ? " active" : ""
-                }`}
-              >
-                <BarChart3 size={16} /> Yearly Forecast
-              </button>
+            {/* Tabs + Auth Controls */}
+            <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
+              <div className="tabs">
+                <button
+                  onClick={() => setCurrentTab("budget")}
+                  className={`tab-btn${
+                    currentTab === "budget" ? " active" : ""
+                  }`}
+                >
+                  <Calculator size={16} /> Monthly Budget
+                </button>
+                <button
+                  onClick={() => setCurrentTab("forecast")}
+                  className={`tab-btn${
+                    currentTab === "forecast" ? " active" : ""
+                  }`}
+                >
+                  <BarChart3 size={16} /> Yearly Forecast
+                </button>
+              </div>
+              <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                {authLoading || remoteLoading ? (
+                  <span style={{ color: "#4a5a6a" }}>Loading...</span>
+                ) : user ? (
+                  <>
+                    <span style={{ color: "#4a5a6a" }}>
+                      {user.user_metadata?.full_name || user.email}
+                    </span>
+                    <button className="btn" onClick={logout}>
+                      Logout
+                    </button>
+                  </>
+                ) : (
+                  <div
+                    style={{
+                      display: "flex",
+                      gap: 8,
+                      alignItems: "center",
+                      flexWrap: "wrap",
+                    }}
+                  >
+                    <input
+                      placeholder="Email"
+                      value={email}
+                      onChange={(e) => setEmail(e.target.value)}
+                      style={{
+                        padding: 8,
+                        border: "1px solid #e5e7eb",
+                        borderRadius: 6,
+                      }}
+                    />
+                    <input
+                      type="password"
+                      placeholder="Password"
+                      value={password}
+                      onChange={(e) => setPassword(e.target.value)}
+                      style={{
+                        padding: 8,
+                        border: "1px solid #e5e7eb",
+                        borderRadius: 6,
+                      }}
+                    />
+                    <button className="btn" onClick={handleLogin}>
+                      Log in
+                    </button>
+                    <button className="btn" onClick={handleSignup}>
+                      Sign up
+                    </button>
+                    <button className="btn" onClick={handleReset}>
+                      Reset password
+                    </button>
+                  </div>
+                )}
+              </div>
             </div>
           </div>
 
-          {currentTab === "budget" && (
+          {!user && !authLoading && (
+            <div style={{ padding: 16 }}>
+              <p style={{ color: "#4a5a6a", marginBottom: 12 }}>
+                Sign in to save and access your budgets anywhere.
+              </p>
+              <div
+                style={{
+                  display: "flex",
+                  gap: 8,
+                  alignItems: "center",
+                  marginBottom: 8,
+                  flexWrap: "wrap",
+                }}
+              >
+                <input
+                  placeholder="Email"
+                  value={email}
+                  onChange={(e) => setEmail(e.target.value)}
+                  style={{
+                    padding: 8,
+                    border: "1px solid #e5e7eb",
+                    borderRadius: 6,
+                  }}
+                />
+                <input
+                  type="password"
+                  placeholder="Password"
+                  value={password}
+                  onChange={(e) => setPassword(e.target.value)}
+                  style={{
+                    padding: 8,
+                    border: "1px solid #e5e7eb",
+                    borderRadius: 6,
+                  }}
+                />
+                <button className="btn" onClick={handleLogin}>
+                  Log in
+                </button>
+                <button className="btn" onClick={handleSignup}>
+                  Sign up
+                </button>
+                <button className="btn" onClick={handleReset}>
+                  Reset password
+                </button>
+              </div>
+              {authError && <div style={{ color: "#dc2626" }}>{authError}</div>}
+              <div style={{ marginTop: 8 }}>
+                <button className="btn" onClick={loginWithGoogle}>
+                  Sign in with Google
+                </button>
+              </div>
+            </div>
+          )}
+
+          {user && currentTab === "budget" && (
             <>
               {/* Month Navigation */}
               <div
@@ -729,9 +907,6 @@ const BudgetManager = () => {
                 </div>
                 {categories.map((category) => {
                   // Calcolo il colore con trasparenza 50%
-                  const bgColor = category.color
-                    ? category.color.replace("#", "#80") // fallback semplice per hex, meglio usare rgba se serve
-                    : "rgba(37,99,235,0.08)";
                   return (
                     <div
                       key={category.id}
@@ -900,7 +1075,7 @@ const BudgetManager = () => {
             </>
           )}
 
-          {currentTab === "forecast" && (
+          {user && currentTab === "forecast" && (
             <div>
               <p style={{ color: "#4a5a6a", marginBottom: 16 }}>
                 Yearly budget forecast based on monthly plans
